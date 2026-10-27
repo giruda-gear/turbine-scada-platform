@@ -4,9 +4,12 @@ from fastapi import Depends, FastAPI
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from scada_api.db import get_session
+from scada_api.core.database import get_session
+from scada_api.router import api_router
 
 app = FastAPI(title="SCADA API", version="0.1.0")
+
+app.include_router(api_router, prefix="/api")
 
 
 @app.get("/health")
