@@ -1,7 +1,12 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class TurbineCreate(BaseModel):
+    organization_id: UUID
+    name: str = Field(min_length=1, max_length=100)
 
 
 class TurbineResponse(BaseModel):

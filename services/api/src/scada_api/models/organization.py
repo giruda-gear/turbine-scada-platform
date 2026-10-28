@@ -6,7 +6,7 @@ from sqlalchemy import DateTime, String, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .base import Base
+from scada_api.models.base import Base
 
 if TYPE_CHECKING:
     from .turbine import Turbine
