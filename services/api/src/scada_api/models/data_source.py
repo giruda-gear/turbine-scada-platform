@@ -24,6 +24,7 @@ class DataSource(Base):
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    endpoint_url: Mapped[str] = mapped_column(String(500), nullable=True)
     protocol: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -38,7 +38,7 @@ class TurbineSourceMapping(Base):
 
     data_source_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("data_sources.id", ondelete="CASCADE"),
+        ForeignKey("data_sources.id", ondelete="RESTRICT"),
         nullable=False,
     )
 
@@ -66,10 +66,6 @@ class TurbineSourceMapping(Base):
         nullable=False,
     )
 
-    data_source: Mapped["DataSource"] = relationship(
-        back_populates="turbine_mappings",
-    )
+    data_source: Mapped["DataSource"] = relationship()
 
-    turbine: Mapped["Turbine"] = relationship(
-        back_populates="source_mappings",
-    )
+    turbine: Mapped["Turbine"] = relationship()
