@@ -22,3 +22,8 @@ build-backend = "uv_build"
 
 [tool.ruff.lint]
 ignore = ["UP037"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

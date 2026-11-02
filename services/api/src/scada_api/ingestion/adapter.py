@@ -1,5 +1,4 @@
 from scada_api.ingestion.schema import NormalizedSourceReading
-from scada_api.models.organization import UUID
 
 
 def normalize_siemens_reading(

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import httpx
@@ -11,9 +12,16 @@ from scada_api.ingestion.service import find_turbine_id, save_readings
 SCADA_API_URL = "http://127.0.0.1:8000/api/simulator/scada/readings"
 
 
-def fetch_readings() -> dict:
+def fetch_readings(
+    start_at: datetime,
+    end_at: datetime,
+) -> dict:
     response = httpx.get(
         SCADA_API_URL,
+        params={
+            "start_at": start_at.isoformat(),
+            "end_at": end_at.isoformat(),
+        },
         timeout=10.0,
     )
     response.raise_for_status()
@@ -55,7 +63,11 @@ def normalize_payload(
 
 if __name__ == "__main__":
     data_source_id = UUID("01a18812-610c-77f3-96f5-bd5e15f2b7fe")
-    payload = fetch_readings()
+
+    start_at = datetime.now(UTC) - timedelta(hours=1)
+    end_at = datetime.now(UTC)
+
+    payload = fetch_readings(start_at, end_at)  
 
     print(f"Vendor: {payload['vendor']}")
     print(f"Readings received: {len(payload['readings'])}")
