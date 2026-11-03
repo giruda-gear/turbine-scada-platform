@@ -1,69 +1,65 @@
-### Polling Window
+## Polling Window
 
-The poller uses time-based windows to retrieve sensor readings incrementally.
+The poller retrieves sensor data using 10-minute aligned, half-open time windows.
 
-All polling windows use a half-open interval:
+flowchart TD
+    A["**Polling Orchestrator**<br/>run_polling()"]
+    B["**Checkpoint Management**<br/>Load checkpoint<br/>Calculate polling window"]
+    C["**Data Ingestion**<br/>HTTP Client<br/>External SCADA API"]
+    D["**Data Processing**<br/>Vendor Adapter<br/>Canonical Mapping<br/>Turbine ID Resolution<br/>Data Validation"]
+    E["**Data Persistence**<br/>PostgreSQL UPSERT<br/>Update Checkpoint"]
+    F["**Success / Failure**<br/>Success: Update last_success_at<br/>Failure: Record last_attempt_at and last_error<br/>Retry on next execution"]
 
-`[start_at, end_at)` `[10:00, 10:10)`
+    A --> B --> C --> D --> E --> F
 
-The end time is rounded down to the nearest 10-minute boundary to avoid requesting the current incomplete measurement interval.
+### Initial Polling
 
-#### Initial Polling
+If no successful checkpoint exists, retrieve the latest one-hour window.
 
-When no successful checkpoint exists, the poller retrieves the most recent one-hour period.
+**Example:** Current time = `10:23`
 
-For example, if the current time is 10:23:
+```text
+start_at = 09:20
+end_at   = 10:20
 
-- Start time: 09:20
-- End time: 10:20
-- Polling window: `[09:20, 10:20)`
+Window: [09:20, 10:20)
+```
 
-#### Normal Polling
+### Normal Polling
 
-After the initial ingestion, the poller starts from the last successfully processed timestamp.
+Start from the last successful checkpoint.
 
-For example:
+**Example:** Last successful end = `10:10`
 
-- Last successful end: 10:10
-- Current time: 10:23
-- Polling window: `[10:10, 10:20)`
+```text
+start_at = 10:10
+end_at   = 10:20
 
-This prevents previously processed time ranges from being requested again during normal operation.
+Window: [10:10, 10:20)
+```
 
-#### Handling Long Outages
+### Long Outages
 
-To avoid excessively large API requests after a prolonged outage, each request is limited by `MAX_WINDOW`.
+Split the missing time range into sequential requests, each limited by `MAX_WINDOW`.
 
-For example, if the last successful checkpoint is 09:00 and the current time is 12:23:
+**Example:** Last checkpoint = `09:00`, Current time = `12:23`, `MAX_WINDOW = 1 hour`
 
-- Request 1: `[09:00, 10:00)`
-- Request 2: `[10:00, 11:00)`
-- Request 3: `[11:00, 12:00)`
+```text
+Request 1: [09:00, 10:00)
+Request 2: [10:00, 11:00)
+Request 3: [11:00, 12:00)
+```
 
-The poller processes these windows sequentially until it catches up with the latest available data.
+Continue until the latest available interval is reached.
 
 ## Data Normalization
 
-Different SCADA vendors may use different API structures, turbine identifiers, and field names.
-The ingestion pipeline uses vendor-specific adapters to convert external payloads into a standardized internal data format.
+Vendor-specific adapters convert SCADA API responses into a common internal format.
 
-### Example
-
-An external SCADA API may return the following payload:
-
-```json
-{
-  "turbine_code": "WT-001",
-  "timestamp": "2026-11-02T10:00:00Z",
-  "wind_speed": 8.2,
-  "active_power": 1450.0,
-  "rotor_speed": 12.5
-}
-{
-  "turbine_id": "internal-turbine-uuid",
-  "measured_at": "2026-11-02T10:00:00Z",
-  "wind_speed_ms": 8.2,
-  "power_output_kw": 1450.0,
-  "rotor_speed_rpm": 12.5
-}
-```
+| External field | Internal Canonical field |
+|---|---|
+| `turbine_code` | `turbine_id` |
+| `timestamp` | `measured_at` |
+| `wind_speed` | `wind_speed_ms` |
+| `active_power` | `power_output_kw` |
+| `rotor_speed` | `rotor_speed_rpm` |
