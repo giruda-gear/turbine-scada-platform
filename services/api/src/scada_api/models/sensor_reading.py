@@ -40,7 +40,7 @@ class SensorReading(Base):
     )
 
     wind_speed_ms: Mapped[float | None] = mapped_column(Double)
-    power_kw: Mapped[float | None] = mapped_column(Double)
+    power_output_kw: Mapped[float | None] = mapped_column(Double)
     rotor_speed_rpm: Mapped[float | None] = mapped_column(Double)
     quality: Mapped[int] = mapped_column(SmallInteger, server_default="0")
 

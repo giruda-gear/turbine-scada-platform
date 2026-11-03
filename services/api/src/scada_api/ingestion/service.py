@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from scada_api.ingestion.schema import CanonicalReading
@@ -39,31 +40,53 @@ def save_readings(
         return 0
 
     records = [
-        SensorReading(
-            turbine_id=reading.turbine_id,
-            measured_at=reading.measured_at,
-            wind_speed_ms=reading.wind_speed_ms,
-            power_kw=reading.power_output_kw,
-            rotor_speed_rpm=reading.rotor_speed_rpm,
-        )
+        {
+            "turbine_id": reading.turbine_id,
+            "measured_at": reading.measured_at,
+            "wind_speed_ms": reading.wind_speed_ms,
+            "power_output_kw": reading.power_output_kw,
+            "rotor_speed_rpm": reading.rotor_speed_rpm,
+        }
         for reading in readings
     ]
 
-    session.add_all(records)
-    session.commit()
+    statement = pg_insert(SensorReading).values(records)
+
+    statement = statement.on_conflict_do_update(
+        index_elements=[
+            SensorReading.turbine_id,
+            SensorReading.measured_at,
+        ],
+        set_={
+            "wind_speed_ms": statement.excluded.wind_speed_ms,
+            "power_output_kw": statement.excluded.power_output_kw,
+            "rotor_speed_rpm": statement.excluded.rotor_speed_rpm,
+            "received_at": func.now(),
+        },
+    )
+
+    session.execute(statement)
 
     return len(records)
 
 
-def floor_interval(
-    value: datetime,
-    interval_miutes: int = 10,
-) -> datetime:
-    return value.replace(
-        minute=(value.minute // interval_miutes) * interval_miutes,
-        second=0,
-        microsecond=0,
-    )
+def update_checkpoint(
+    checkpoint: IngestionCheckpoints,
+    attempted_at: datetime,
+    end_at: datetime,
+) -> None:
+    checkpoint.last_attempt_at = attempted_at
+    checkpoint.last_success_at = end_at
+    checkpoint.last_error = None
+
+
+def record_polling_failure(
+    checkpoint: IngestionCheckpoints,
+    attempted_at: datetime,
+    error: str,
+) -> None:
+    checkpoint.last_attempt_at = attempted_at
+    checkpoint.last_error = error[:1000]
 
 
 def calculate_polling_window(
@@ -83,3 +106,14 @@ def calculate_polling_window(
     end_at = min(end_at, start_at + MAX_WINDOW)
 
     return start_at, end_at
+
+
+def floor_interval(
+    value: datetime,
+    interval_miutes: int = 10,
+) -> datetime:
+    return value.replace(
+        minute=(value.minute // interval_miutes) * interval_miutes,
+        second=0,
+        microsecond=0,
+    )

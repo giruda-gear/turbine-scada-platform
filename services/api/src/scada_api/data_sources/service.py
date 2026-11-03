@@ -3,7 +3,11 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from scada_api.data_sources.schemas import DataSourceCreate
-from scada_api.models import DataSource, Organization
+from scada_api.models import (
+    DataSource,
+    IngestionCheckpoints,
+    Organization,
+)
 
 
 def create_data_source(
@@ -24,6 +28,11 @@ def create_data_source(
     )
 
     session.add(data_source)
+    session.flush()
+
+    checkpoint = IngestionCheckpoints(data_source_id=data_source.id)
+
+    session.add(checkpoint)
     session.commit()
     session.refresh(data_source)
 

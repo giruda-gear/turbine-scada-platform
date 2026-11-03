@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter
 
@@ -13,14 +13,14 @@ def get_scada_readings(
     readings = [
         {
             "turbine_code": "WT-001",
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": (end_at - timedelta(minutes=1)).isoformat(),
             "wind_speed": 8.2,
             "active_power": 1450.0,
             "rotor_speed": 12.5,
         },
         {
             "turbine_code": "WT-002",
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": (end_at - timedelta(minutes=1)).isoformat(),
             "wind_speed": 9.1,
             "active_power": 1820.0,
             "rotor_speed": 13.2,
