@@ -4,21 +4,15 @@ The poller retrieves sensor data using 10-minute aligned, half-open time windows
 
 ```mermaid
 flowchart LR
-    subgraph T1[" "]
-        A["<b>Checkpoint</b><br/>Load & calc window"]
-    end
+    A["Checkpoint\nRead last_success_at\n→ calc window"]
+    B["Fetch\nSCADA API\n(no DB connection)"]
+    C["Normalize + UPSERT\nIdempotent save"]
+    D["Advance checkpoint\nlast_success_at = end_at"]
+    X["Rollback\nCheckpoint unchanged\n→ same window retried"]
 
-    subgraph NET[" "]
-        B["<b>Fetch</b><br/>SCADA API"]
-    end
-
-    subgraph T2[" "]
-        C["<b>Normalize</b><br/>Map & validate"]
-        D["<b>Persist</b><br/>UPSERT readings<br/>+ advance checkpoint"]
-        C --> D
-    end
-
-    A --> B --> T2
+    A --> B --> C --> D
+    B -. fail .-> X
+    C -. fail .-> X
 ```
 
 ### Initial Polling
