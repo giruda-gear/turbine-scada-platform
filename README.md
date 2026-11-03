@@ -2,15 +2,24 @@
 
 The poller retrieves sensor data using 10-minute aligned, half-open time windows.
 
-flowchart TD
-    A["**Polling Orchestrator**<br/>run_polling()"]
-    B["**Checkpoint Management**<br/>Load checkpoint<br/>Calculate polling window"]
-    C["**Data Ingestion**<br/>HTTP Client<br/>External SCADA API"]
-    D["**Data Processing**<br/>Vendor Adapter<br/>Canonical Mapping<br/>Turbine ID Resolution<br/>Data Validation"]
-    E["**Data Persistence**<br/>PostgreSQL UPSERT<br/>Update Checkpoint"]
-    F["**Success / Failure**<br/>Success: Update last_success_at<br/>Failure: Record last_attempt_at and last_error<br/>Retry on next execution"]
+```mermaid
+flowchart LR
+    subgraph T1[" "]
+        A["<b>Checkpoint</b><br/>Load & calc window"]
+    end
 
-    A --> B --> C --> D --> E --> F
+    subgraph NET[" "]
+        B["<b>Fetch</b><br/>SCADA API"]
+    end
+
+    subgraph T2[" "]
+        C["<b>Normalize</b><br/>Map & validate"]
+        D["<b>Persist</b><br/>UPSERT readings<br/>+ advance checkpoint"]
+        C --> D
+    end
+
+    A --> B --> T2
+```
 
 ### Initial Polling
 
