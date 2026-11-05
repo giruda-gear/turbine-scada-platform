@@ -66,3 +66,22 @@ Vendor-specific adapters convert SCADA API responses into a common internal form
 | `wind_speed` | `wind_speed_ms` |
 | `active_power` | `power_output_kw` |
 | `rotor_speed` | `rotor_speed_rpm` |
+
+## Strategy Pattern
+```python
+# 1. Define individual strategies (algorithms)
+def normalize_siemens(raw):
+    # Siemens-specific parsing logic...
+def normalize_vestas(raw):
+    # Vestas-specific parsing logic...
+
+ADAPTERS = {
+    "siemens": normalize_siemens,
+    "vestas": normalize_vestas,
+}
+
+# 2. Context function uses the chosen strategy dynamically
+def normalize_payload(provider: str, payload: dict):
+    adapter = ADAPTERS.get(provider)
+    normalized_data = adapter(payload)
+```
