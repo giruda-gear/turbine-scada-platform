@@ -94,6 +94,7 @@ def run_polling(data_source_id: UUID) -> int:
 
         if data_source is None:
             raise ValueError(f"Data source not found: {data_source_id}")
+        
         if data_source.protocol != "http":
             raise ValueError(f"Unsupported polling protocol: {data_source.protocol}")
 

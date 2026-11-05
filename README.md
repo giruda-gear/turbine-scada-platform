@@ -59,13 +59,13 @@ Continue until the latest available interval is reached.
 
 Vendor-specific adapters convert SCADA API responses into a common internal format.
 
-| External field | Internal Canonical field |
-|---|---|
-| `turbine_code` | `turbine_id` |
-| `timestamp` | `measured_at` |
-| `wind_speed` | `wind_speed_ms` |
-| `active_power` | `power_output_kw` |
-| `rotor_speed` | `rotor_speed_rpm` |
+| External field 1 | External field 2 | Internal Canonical field |
+|---|---|---|
+| `turbine_code`    | `asset_id`        | `turbine_id`      |
+| `timestamp`       | `recorded_at`     | `measured_at`     |
+| `wind_speed`      | `wind_velocity`   | `wind_speed_ms`   |
+| `active_power`    | `power_kw`        | `power_output_kw` |
+| `rotor_speed`     | `rotor_rpm`       | `rotor_speed_rpm` |
 
 ## Strategy Pattern
 ```python
