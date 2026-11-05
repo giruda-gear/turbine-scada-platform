@@ -5,7 +5,11 @@ import httpx
 from sqlalchemy.orm import Session
 
 from scada_api.core.database import SessionLocal
-from scada_api.ingestion.adapter import normalize_siemens_reading
+from scada_api.data_sources.service import get_data_source
+from scada_api.ingestion.adapter import (
+    normalize_siemens_reading,
+    normalize_vestas_reading,
+)
 from scada_api.ingestion.schema import CanonicalReading
 from scada_api.ingestion.service import (
     calculate_polling_window,
@@ -16,15 +20,19 @@ from scada_api.ingestion.service import (
     update_checkpoint,
 )
 
-SCADA_API_URL = "http://127.0.0.1:8009/api/simulator/scada/readings"
+ADAPTERS = {
+    "siemens": normalize_siemens_reading,
+    "vestas": normalize_vestas_reading,
+}
 
 
 def fetch_readings(
+    endpoint_url: str,
     start_at: datetime,
     end_at: datetime,
 ) -> dict:
     response = httpx.get(
-        SCADA_API_URL,
+        endpoint_url,
         params={
             "start_at": start_at.isoformat(),
             "end_at": end_at.isoformat(),
@@ -38,12 +46,17 @@ def fetch_readings(
 def normalize_payload(
     session: Session,
     data_source_id: UUID,
+    provider: str,
     payload: dict,
 ) -> list[CanonicalReading]:
     readings: list[CanonicalReading] = []
+    adapter = ADAPTERS.get(provider)
+
+    if adapter is None:
+        raise ValueError(f"Unsupported SCADA provider: {provider}")
 
     for raw in payload["readings"]:
-        source_reading = normalize_siemens_reading(raw)
+        source_reading = adapter(raw)
 
         turbine_id = find_turbine_id(
             session=session,
@@ -70,10 +83,22 @@ def normalize_payload(
 
 def run_polling(data_source_id: UUID) -> int:
     with SessionLocal() as session:
+        data_source = get_data_source(
+            session=session,
+            data_source_id=data_source_id,
+        )
         checkpoint = get_checkpoint(
             session=session,
             data_source_id=data_source_id,
         )
+
+        if data_source is None:
+            raise ValueError(f"Data source not found: {data_source_id}")
+        if data_source.protocol != "http":
+            raise ValueError(f"Unsupported polling protocol: {data_source.protocol}")
+
+        if not data_source.endpoint_url:
+            raise ValueError("HTTP data source requires an endpoint_url")
 
         if checkpoint is None:
             raise ValueError(f"Checkpoint not found: {data_source_id}")
@@ -91,6 +116,7 @@ def run_polling(data_source_id: UUID) -> int:
 
     try:
         payload = fetch_readings(
+            endpoint_url=data_source.endpoint_url,
             start_at=start_at,
             end_at=end_at,
         )
@@ -100,6 +126,7 @@ def run_polling(data_source_id: UUID) -> int:
             readings = normalize_payload(
                 session=session,
                 data_source_id=data_source_id,
+                provider=data_source.provider,
                 payload=payload,
             )
 
@@ -112,7 +139,6 @@ def run_polling(data_source_id: UUID) -> int:
                 session=session,
                 data_source_id=data_source_id,
             )
-            assert checkpoint is not None
 
             if checkpoint is None:
                 raise ValueError(f"Checkpoint not found: {data_source_id}")
@@ -142,7 +168,7 @@ def run_polling(data_source_id: UUID) -> int:
 
 
 if __name__ == "__main__":
-    data_source_id = UUID("01a1a0df-e7a0-7091-8c3c-6957a404b3de")
+    data_source_id = UUID("01a1ac47-1032-7a75-b984-819c68f29df0")
 
     saved_count = run_polling(data_source_id)
 

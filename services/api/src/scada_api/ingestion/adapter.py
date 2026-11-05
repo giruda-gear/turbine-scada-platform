@@ -11,3 +11,15 @@ def normalize_siemens_reading(
         power_output_kw=raw.get("active_power"),
         rotor_speed_rpm=raw.get("rotor_speed"),
     )
+
+
+def normalize_vestas_reading(
+    raw: dict,
+) -> NormalizedSourceReading:
+    return NormalizedSourceReading(
+        external_turbine_id=raw["asset_id"],
+        measured_at=raw["recorded_at"],
+        wind_speed_ms=raw.get("wind_velocity"),
+        power_output_kw=raw.get("power_kw"),
+        rotor_speed_rpm=raw.get("rotor_rpm"),
+    )
