@@ -4,7 +4,6 @@ from uuid import UUID
 import httpx
 from sqlalchemy.orm import Session
 
-from scada_api.core.database import SessionLocal
 from scada_api.data_sources.service import get_data_source
 from scada_api.ingestion.adapter import (
     normalize_siemens_reading,
@@ -81,8 +80,14 @@ def normalize_payload(
     return readings
 
 
-def run_polling(data_source_id: UUID) -> int:
-    with SessionLocal() as session:
+from sqlalchemy.orm import sessionmaker
+
+
+def run_polling(
+    data_source_id: UUID,
+    session_factory: sessionmaker[Session],
+) -> int:
+    with session_factory() as session:
         data_source = get_data_source(
             session=session,
             data_source_id=data_source_id,
@@ -94,7 +99,7 @@ def run_polling(data_source_id: UUID) -> int:
 
         if data_source is None:
             raise ValueError(f"Data source not found: {data_source_id}")
-        
+
         if data_source.protocol != "http":
             raise ValueError(f"Unsupported polling protocol: {data_source.protocol}")
 
@@ -103,6 +108,9 @@ def run_polling(data_source_id: UUID) -> int:
 
         if checkpoint is None:
             raise ValueError(f"Checkpoint not found: {data_source_id}")
+
+        endpoint_url = data_source.endpoint_url
+        provider = data_source.provider
 
         window = calculate_polling_window(
             last_success_at=checkpoint.last_success_at,
@@ -117,17 +125,16 @@ def run_polling(data_source_id: UUID) -> int:
 
     try:
         payload = fetch_readings(
-            endpoint_url=data_source.endpoint_url,
+            endpoint_url=endpoint_url,
             start_at=start_at,
             end_at=end_at,
         )
-        # release DB connection before the API call (avoids pool exhaustion)
 
-        with SessionLocal() as session, session.begin():
+        with session_factory() as session, session.begin():
             readings = normalize_payload(
                 session=session,
                 data_source_id=data_source_id,
-                provider=data_source.provider,
+                provider=provider,
                 payload=payload,
             )
 
@@ -143,7 +150,6 @@ def run_polling(data_source_id: UUID) -> int:
 
             if checkpoint is None:
                 raise ValueError(f"Checkpoint not found: {data_source_id}")
-            # later, think about the race condition
 
             update_checkpoint(
                 checkpoint=checkpoint,
@@ -154,23 +160,25 @@ def run_polling(data_source_id: UUID) -> int:
         return saved_count
 
     except Exception as exc:
-        with SessionLocal() as session, session.begin():
+        with session_factory() as session, session.begin():
             checkpoint = get_checkpoint(
                 session=session,
                 data_source_id=data_source_id,
             )
+
             if checkpoint is not None:
                 record_polling_failure(
                     checkpoint=checkpoint,
                     error=str(exc),
                     attempted_at=attempted_at,
                 )
+
         raise
 
 
-if __name__ == "__main__":
-    data_source_id = UUID("01a1ac47-1032-7a75-b984-819c68f29df0")
+# if __name__ == "__main__":
+#     data_source_id = UUID("01a1ac47-1032-7a75-b984-819c68f29df0")
 
-    saved_count = run_polling(data_source_id)
+#     saved_count = run_polling(data_source_id, SessionLocal)
 
-    print(f"Readings saved: {saved_count}")
+#     print(f"Readings saved: {saved_count}")
