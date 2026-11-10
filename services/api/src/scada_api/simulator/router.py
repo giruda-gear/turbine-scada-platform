@@ -1,41 +1,63 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
-router = APIRouter(prefix="/simulator", tags=["Simulator"])
+from scada_api.simulator.siemens import generate_siemens_reading
+from scada_api.simulator.time import normalize_utc
+from scada_api.simulator.vestas import generate_vestas_reading
+
+router = APIRouter()
 
 
-@router.get("/scada/simens/readings")
-def get_scada_simens_readings(
+TURBINES = {
+    "siemens": ["WT-001", "WT-002"],
+    "vestas": ["V100-001", "V100-002"],
+}
+
+
+def generate_readings(
+    provider: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> list[dict]:
+    start_at = normalize_utc(start_at)
+    end_at = normalize_utc(end_at)
+
+    if start_at >= end_at:
+        raise HTTPException(
+            status_code=400,
+            detail="start_at must be earlier than end_at",
+        )
+
+    measured_at = end_at
+
+    if not start_at <= measured_at < end_at:
+        return []
+
+    generators = {
+        "siemens": generate_siemens_reading,
+        "vestas": generate_vestas_reading,
+    }
+
+    generator = generators[provider]
+
+    return [generator(turbine_code, measured_at) for turbine_code in TURBINES[provider]]
+
+
+@router.get("/scada/siemens/readings")
+def get_scada_siemens_readings(
     start_at: datetime,
     end_at: datetime,
 ):
-    readings = [
-        {
-            "turbine_code": "WT-001",
-            "timestamp": (end_at - timedelta(minutes=1)).isoformat(),
-            "wind_speed": 8.2,
-            "active_power": 1450.0,
-            "rotor_speed": 12.5,
-        },
-        {
-            "turbine_code": "WT-002",
-            "timestamp": (end_at - timedelta(minutes=1)).isoformat(),
-            "wind_speed": 9.1,
-            "active_power": 1820.0,
-            "rotor_speed": 13.2,
-        },
-    ]
-
-    filtered_readings = [
-        reading
-        for reading in readings
-        if start_at <= datetime.fromisoformat(reading["timestamp"]) < end_at
-    ]
-
     return {
-        "vendor": "simens",
-        "readings": filtered_readings,
+        "vendor": "siemens",
+        "interval_seconds": 600,
+        "aggregation": "mean",
+        "readings": generate_readings(
+            "siemens",
+            start_at,
+            end_at,
+        ),
     }
 
 
@@ -44,30 +66,13 @@ def get_scada_vestas_readings(
     start_at: datetime,
     end_at: datetime,
 ):
-    readings = [
-        {
-            "asset_id": "V100-001",
-            "recorded_at": (end_at - timedelta(minutes=1)).isoformat(),
-            "wind_velocity": 8.2,
-            "power_kw": 1350.0,
-            "rotor_rpm": 11.5,
-        },
-        {
-            "asset_id": "V100-002",
-            "recorded_at": (end_at - timedelta(minutes=1)).isoformat(),
-            "wind_velocity": 9.1,
-            "power_kw": 1620.0,
-            "rotor_rpm": 12.2,
-        },
-    ]
-
-    filtered_readings = [
-        reading
-        for reading in readings
-        if start_at <= datetime.fromisoformat(reading["recorded_at"]) < end_at
-    ]
-
     return {
         "vendor": "vestas",
-        "readings": filtered_readings,
+        "interval_seconds": 600,
+        "aggregation": "mean",
+        "readings": generate_readings(
+            "vestas",
+            start_at,
+            end_at,
+        ),
     }
