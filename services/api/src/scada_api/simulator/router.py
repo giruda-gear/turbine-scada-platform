@@ -28,9 +28,9 @@ def generate_readings(
             status_code=400,
             detail="start_at must be earlier than end_at",
         )
-
-    measured_at = end_at
-
+    # TODO: generate multiple readings
+    measured_at = end_at - timedelta(minutes=10)
+    
     if not start_at <= measured_at < end_at:
         return []
 

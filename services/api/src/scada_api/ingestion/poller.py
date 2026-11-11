@@ -1,9 +1,11 @@
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
 import httpx
 from sqlalchemy.orm import Session
 
+from scada_api.core.database import SessionLocal
 from scada_api.data_sources.service import get_data_source
 from scada_api.ingestion.adapter import (
     normalize_siemens_reading,
@@ -19,6 +21,8 @@ from scada_api.ingestion.service import (
     update_checkpoint,
 )
 
+logger = logging.getLogger(__name__)
+
 ADAPTERS = {
     "siemens": normalize_siemens_reading,
     "vestas": normalize_vestas_reading,
@@ -26,11 +30,12 @@ ADAPTERS = {
 
 
 def fetch_readings(
+    client: httpx.Client,
     endpoint_url: str,
     start_at: datetime,
     end_at: datetime,
 ) -> dict:
-    response = httpx.get(
+    response = client.get(
         endpoint_url,
         params={
             "start_at": start_at.isoformat(),
@@ -39,6 +44,7 @@ def fetch_readings(
         timeout=10.0,
     )
     response.raise_for_status()
+
     return response.json()
 
 
@@ -64,8 +70,7 @@ def normalize_payload(
         )
 
         if turbine_id is None:
-            # TODO: logging
-            print(f"Skipping unmapped turbine: {source_reading.external_turbine_id}")
+            logger.warning("Unmapped turbine: %s", source_reading.external_turbine_id)
             continue
 
         reading = CanonicalReading(
@@ -84,9 +89,13 @@ from sqlalchemy.orm import sessionmaker
 
 
 def run_polling(
+    client: httpx.Client,
     data_source_id: UUID,
     session_factory: sessionmaker[Session],
+    now: datetime | None = None,
 ) -> int:
+    now = now or datetime.now(UTC)
+
     with session_factory() as session:
         data_source = get_data_source(
             session=session,
@@ -114,7 +123,7 @@ def run_polling(
 
         window = calculate_polling_window(
             last_success_at=checkpoint.last_success_at,
-            now=datetime.now(UTC),
+            now=now,
         )
 
     if window is None:
@@ -128,7 +137,10 @@ def run_polling(
             endpoint_url=endpoint_url,
             start_at=start_at,
             end_at=end_at,
+            client=client,
         )
+        print(endpoint_url)
+        print(payload)
 
         with session_factory() as session, session.begin():
             readings = normalize_payload(
@@ -170,15 +182,20 @@ def run_polling(
                 record_polling_failure(
                     checkpoint=checkpoint,
                     error=str(exc),
-                    attempted_at=attempted_at,
+                    attempted_at=now,
                 )
 
         raise
 
 
-# if __name__ == "__main__":
-#     data_source_id = UUID("01a1ac47-1032-7a75-b984-819c68f29df0")
+if __name__ == "__main__":
+    data_source_id = UUID("01a1ac47-1032-7a75-b984-819c68f29df0")
 
-#     saved_count = run_polling(data_source_id, SessionLocal)
+    with httpx.Client() as client:
+        saved_count = run_polling(
+            data_source_id=data_source_id,
+            session_factory=SessionLocal,
+            client=client,
+        )
 
-#     print(f"Readings saved: {saved_count}")
+    print(f"Readings saved: {saved_count}")

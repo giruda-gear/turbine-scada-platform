@@ -12,6 +12,7 @@ def make_rng(
     measured_at = normalize_utc(measured_at)
 
     seed_source = f"{turbine_code}|{measured_at.isoformat()}"
+    # ensure the same innput always produces the same seed
     seed = hashlib.sha256(seed_source.encode("utf-8")).digest()
 
     return random.Random(int.from_bytes(seed, byteorder="big"))
