@@ -28,13 +28,17 @@ class SensorReading(Base):
     # (<table>_<time_col>_idx, DESC). Declared here so Alembic autogenerate
     # sees it in the model and doesn't try to drop it. Keep name/ordering in sync.
     __table_args__ = (
-            Index(
-                "sensor_readings_measured_at_idx",
-                measured_at.desc(),
-            ),
-        )
-    
+        Index(
+            "sensor_readings_measured_at_idx",
+            measured_at.desc(),
+        ),
+    )
+
     received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
     )

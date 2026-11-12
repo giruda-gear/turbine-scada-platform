@@ -1,7 +1,8 @@
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, literal_column, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,13 @@ from scada_api.models import IngestionCheckpoints, SensorReading, TurbineSourceM
 
 INITIAL_LOOKBACK = timedelta(hours=1)
 MAX_WINDOW = timedelta(hours=1)
+
+
+@dataclass
+class SaveResult:
+    inserted: int
+    updated: int
+    unchanged: int
 
 
 def get_checkpoint(
@@ -32,42 +40,49 @@ def find_turbine_id(
     return session.scalar(statement)
 
 
-def save_readings(
-    session: Session,
-    readings: list[CanonicalReading],
-) -> int:
+def save_readings(session: Session, readings: list[CanonicalReading]) -> SaveResult:
     if not readings:
-        return 0
+        return SaveResult(0, 0, 0)
 
-    records = [
-        {
-            "turbine_id": reading.turbine_id,
-            "measured_at": reading.measured_at,
-            "wind_speed_ms": reading.wind_speed_ms,
-            "power_output_kw": reading.power_output_kw,
-            "rotor_speed_rpm": reading.rotor_speed_rpm,
+    by_key = {
+        (r.turbine_id, r.measured_at): {
+            "turbine_id": r.turbine_id,
+            "measured_at": r.measured_at,
+            "wind_speed_ms": r.wind_speed_ms,
+            "power_output_kw": r.power_output_kw,
+            "rotor_speed_rpm": r.rotor_speed_rpm,
         }
-        for reading in readings
-    ]
+        for r in readings
+    }
+    records = list(by_key.values())
+    batch_duplicates = len(readings) - len(records)
 
-    statement = pg_insert(SensorReading).values(records)
-
-    statement = statement.on_conflict_do_update(
-        index_elements=[
-            SensorReading.turbine_id,
-            SensorReading.measured_at,
-        ],
+    stmt = pg_insert(SensorReading).values(records)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[SensorReading.turbine_id, SensorReading.measured_at],
         set_={
-            "wind_speed_ms": statement.excluded.wind_speed_ms,
-            "power_output_kw": statement.excluded.power_output_kw,
-            "rotor_speed_rpm": statement.excluded.rotor_speed_rpm,
-            "received_at": func.now(),
+            "wind_speed_ms": stmt.excluded.wind_speed_ms,
+            "power_output_kw": stmt.excluded.power_output_kw,
+            "rotor_speed_rpm": stmt.excluded.rotor_speed_rpm,
+            "updated_at": func.now(),
         },
-    )
+        where=or_(
+            SensorReading.wind_speed_ms.is_distinct_from(stmt.excluded.wind_speed_ms),
+            SensorReading.power_output_kw.is_distinct_from(
+                stmt.excluded.power_output_kw
+            ),
+            SensorReading.rotor_speed_rpm.is_distinct_from(
+                stmt.excluded.rotor_speed_rpm
+            ),
+        ),
+    ).returning(literal_column("(xmax = 0)"))
 
-    session.execute(statement)
+    rows = session.execute(stmt).all()
+    inserted = sum(1 for (is_new,) in rows if is_new)
+    updated = len(rows) - inserted
+    unchanged = len(records) - len(rows) + batch_duplicates
 
-    return len(records)
+    return SaveResult(inserted, updated, unchanged)
 
 
 def update_checkpoint(
