@@ -11,14 +11,19 @@ from scada_api.ingestion.adapter import (
     normalize_siemens_reading,
     normalize_vestas_reading,
 )
+from scada_api.ingestion.enums import IngestionRunStatus
 from scada_api.ingestion.schema import CanonicalReading
 from scada_api.ingestion.service import (
+    SaveResult,
     calculate_polling_window,
+    create_ingestion_run,
     find_turbine_id,
     get_checkpoint,
     record_polling_failure,
     save_readings,
+    save_rejected_reading,
     update_checkpoint,
+    update_ingestion_run,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +58,7 @@ def normalize_payload(
     data_source_id: UUID,
     provider: str,
     payload: dict,
+    ingestion_run_id: int,
 ) -> list[CanonicalReading]:
     readings: list[CanonicalReading] = []
     adapter = ADAPTERS.get(provider)
@@ -70,7 +76,14 @@ def normalize_payload(
         )
 
         if turbine_id is None:
-            logger.warning("Unmapped turbine: %s", source_reading.external_turbine_id)
+            save_rejected_reading(
+                session=session,
+                ingestion_run_id=ingestion_run_id,
+                external_turbine_id=source_reading.external_turbine_id,
+                raw_payload=raw,
+                reason="unmapped_turbine",
+                error_message=f"No mapping found for {source_reading.external_turbine_id}",
+            )
             continue
 
         reading = CanonicalReading(
@@ -87,13 +100,25 @@ def normalize_payload(
 
 from sqlalchemy.orm import sessionmaker
 
+'''
+* Initial transaction
+Create and commit IngestionRun with status running.
 
+* HTTP request
+Fetch vendor payload outside the database transaction.
+
+* Success transaction
+Normalize → save rejected readings → save canonical readings → update checkpoint → update ingestion run → commit together.
+
+* Failure transaction
+Update checkpoint failure information and mark ingestion run failed → commit.
+'''
 def run_polling(
     client: httpx.Client,
     data_source_id: UUID,
     session_factory: sessionmaker[Session],
     now: datetime | None = None,
-) -> int:
+) -> SaveResult:
     now = now or datetime.now(UTC)
 
     with session_factory() as session:
@@ -127,10 +152,25 @@ def run_polling(
         )
 
     if window is None:
-        return 0
+        return SaveResult(
+            inserted=0,
+            updated=0,
+            unchanged=0,
+        )
 
     start_at, end_at = window
-    attempted_at = datetime.now(UTC)
+    attempted_at = now
+
+    with session_factory() as session:
+        ingestion_run = create_ingestion_run(
+            session=session,
+            data_source_id=data_source_id,
+            window_start=start_at,
+            window_end=end_at,
+            started_at=attempted_at,
+        )
+
+        ingestion_run_id = ingestion_run.id
 
     try:
         payload = fetch_readings(
@@ -148,6 +188,7 @@ def run_polling(
                 data_source_id=data_source_id,
                 provider=provider,
                 payload=payload,
+                ingestion_run_id=ingestion_run_id,
             )
 
             saved_count = save_readings(
@@ -169,6 +210,18 @@ def run_polling(
                 end_at=end_at,
             )
 
+            update_ingestion_run(
+                session=session,
+                ingestion_run_id=ingestion_run_id,
+                status=IngestionRunStatus.SUCCESS,
+                completed_at=now,
+                received_count=len(payload["readings"]),
+                inserted_count=saved_count.inserted,
+                updated_count=saved_count.updated,
+                unchanged_count=saved_count.unchanged,
+                rejected_count=len(payload["readings"]) - len(readings),
+            )
+
         return saved_count
 
     except Exception as exc:
@@ -182,8 +235,16 @@ def run_polling(
                 record_polling_failure(
                     checkpoint=checkpoint,
                     error=str(exc),
-                    attempted_at=now,
+                    attempted_at=attempted_at,
                 )
+
+            update_ingestion_run(
+                session=session,
+                ingestion_run_id=ingestion_run_id,
+                status=IngestionRunStatus.FAILED,
+                completed_at=now,
+                error_message=str(exc),
+            )
 
         raise
 
@@ -192,10 +253,12 @@ if __name__ == "__main__":
     data_source_id = UUID("01a1ac47-1032-7a75-b984-819c68f29df0")
 
     with httpx.Client() as client:
-        saved_count = run_polling(
+        result = run_polling(
+            client=client,
             data_source_id=data_source_id,
             session_factory=SessionLocal,
-            client=client,
         )
 
-    print(f"Readings saved: {saved_count}")
+    print(f"Inserted: {result.inserted}")
+    print(f"Updated: {result.updated}")
+    print(f"Unchanged: {result.unchanged}")

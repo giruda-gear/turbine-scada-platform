@@ -6,8 +6,15 @@ from sqlalchemy import func, literal_column, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from scada_api.ingestion.enums import IngestionRunStatus
 from scada_api.ingestion.schema import CanonicalReading
-from scada_api.models import IngestionCheckpoints, SensorReading, TurbineSourceMapping
+from scada_api.models import (
+    IngestionCheckpoints,
+    IngestionRun,
+    RejectedReading,
+    SensorReading,
+    TurbineSourceMapping,
+)
 
 INITIAL_LOOKBACK = timedelta(hours=1)
 MAX_WINDOW = timedelta(hours=1)
@@ -38,6 +45,26 @@ def find_turbine_id(
     )
 
     return session.scalar(statement)
+
+
+def create_ingestion_run(
+    session: Session,
+    data_source_id: UUID,
+    window_start: datetime,
+    window_end: datetime,
+    started_at: datetime,
+) -> IngestionRun:
+    run = IngestionRun(
+        data_source_id=data_source_id,
+        window_start=window_start,
+        window_end=window_end,
+        started_at=started_at,
+        status=IngestionRunStatus.RUNNING,
+    )
+
+    session.add(run)
+    session.commit()
+    return run
 
 
 def save_readings(session: Session, readings: list[CanonicalReading]) -> SaveResult:
@@ -85,6 +112,24 @@ def save_readings(session: Session, readings: list[CanonicalReading]) -> SaveRes
     return SaveResult(inserted, updated, unchanged)
 
 
+def save_rejected_reading(
+    session: Session,
+    ingestion_run_id: int,
+    external_turbine_id: str | None,
+    raw_payload: dict,
+    reason: str,
+    error_message: str | None = None,
+) -> None:
+    rejected = RejectedReading(
+        ingestion_run_id=ingestion_run_id,
+        external_turbine_id=external_turbine_id,
+        raw_payload=raw_payload,
+        reason=reason,
+        error_message=error_message,
+    )
+    session.add(rejected)
+
+
 def update_checkpoint(
     checkpoint: IngestionCheckpoints,
     attempted_at: datetime,
@@ -93,6 +138,33 @@ def update_checkpoint(
     checkpoint.last_attempt_at = attempted_at
     checkpoint.last_success_at = end_at
     checkpoint.last_error = None
+
+
+def update_ingestion_run(
+    session: Session,
+    ingestion_run_id: int,
+    status: IngestionRunStatus,
+    completed_at: datetime,
+    received_count: int = 0,
+    inserted_count: int = 0,
+    updated_count: int = 0,
+    unchanged_count: int = 0,
+    rejected_count: int = 0,
+    error_message: str | None = None,
+) -> None:
+    ingestion_run = session.get(IngestionRun, ingestion_run_id)
+
+    if ingestion_run is None:
+        raise ValueError(f"Ingestion run not found: {ingestion_run_id}")
+
+    ingestion_run.status = status
+    ingestion_run.completed_at = completed_at
+    ingestion_run.received_count = received_count
+    ingestion_run.inserted_count = inserted_count
+    ingestion_run.updated_count = updated_count
+    ingestion_run.unchanged_count = unchanged_count
+    ingestion_run.rejected_count = rejected_count
+    ingestion_run.error_message = error_message
 
 
 def record_polling_failure(
@@ -125,10 +197,10 @@ def calculate_polling_window(
 
 def floor_interval(
     value: datetime,
-    interval_miutes: int = 10,
+    interval_minutes: int = 10,
 ) -> datetime:
     return value.replace(
-        minute=(value.minute // interval_miutes) * interval_miutes,
+        minute=(value.minute // interval_minutes) * interval_minutes,
         second=0,
         microsecond=0,
     )
