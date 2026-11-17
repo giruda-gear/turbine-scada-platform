@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from scada_api.data_sources.schemas import DataSourceCreate
@@ -44,3 +45,13 @@ def get_data_source(
     data_source_id: UUID,
 ) -> DataSource | None:
     return session.get(DataSource, data_source_id)
+
+
+def get_active_data_sources(
+    session: Session,
+) -> list[UUID]:
+    return list(
+        session.scalars(
+            select(DataSource.id).where(DataSource.is_active.is_(True))
+        ).all()
+    )

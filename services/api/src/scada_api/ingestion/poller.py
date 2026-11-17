@@ -3,104 +3,32 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import httpx
-from sqlalchemy.orm import Session
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
-from scada_api.core.database import SessionLocal
 from scada_api.data_sources.service import get_data_source
-from scada_api.ingestion.adapter import (
-    normalize_siemens_reading,
-    normalize_vestas_reading,
-)
+from scada_api.ingestion.client import fetch_readings
 from scada_api.ingestion.enums import IngestionRunStatus
-from scada_api.ingestion.schema import CanonicalReading
+from scada_api.ingestion.locking import release_lock, try_acquire_lock
+from scada_api.ingestion.normalizer import normalize_payload
 from scada_api.ingestion.service import (
     SaveResult,
     calculate_polling_window,
     create_ingestion_run,
-    find_turbine_id,
     get_checkpoint,
     record_polling_failure,
     save_readings,
-    save_rejected_reading,
     update_checkpoint,
     update_ingestion_run,
 )
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
-ADAPTERS = {
-    "siemens": normalize_siemens_reading,
-    "vestas": normalize_vestas_reading,
-}
-
-
-def fetch_readings(
-    client: httpx.Client,
-    endpoint_url: str,
-    start_at: datetime,
-    end_at: datetime,
-) -> dict:
-    response = client.get(
-        endpoint_url,
-        params={
-            "start_at": start_at.isoformat(),
-            "end_at": end_at.isoformat(),
-        },
-        timeout=10.0,
-    )
-    response.raise_for_status()
-
-    return response.json()
-
-
-def normalize_payload(
-    session: Session,
-    data_source_id: UUID,
-    provider: str,
-    payload: dict,
-    ingestion_run_id: int,
-) -> list[CanonicalReading]:
-    readings: list[CanonicalReading] = []
-    adapter = ADAPTERS.get(provider)
-
-    if adapter is None:
-        raise ValueError(f"Unsupported SCADA provider: {provider}")
-
-    for raw in payload["readings"]:
-        source_reading = adapter(raw)
-
-        turbine_id = find_turbine_id(
-            session=session,
-            data_source_id=data_source_id,
-            external_turbine_id=source_reading.external_turbine_id,
-        )
-
-        if turbine_id is None:
-            save_rejected_reading(
-                session=session,
-                ingestion_run_id=ingestion_run_id,
-                external_turbine_id=source_reading.external_turbine_id,
-                raw_payload=raw,
-                reason="unmapped_turbine",
-                error_message=f"No mapping found for {source_reading.external_turbine_id}",
-            )
-            continue
-
-        reading = CanonicalReading(
-            turbine_id=turbine_id,
-            measured_at=source_reading.measured_at,
-            wind_speed_ms=source_reading.wind_speed_ms,
-            power_output_kw=source_reading.power_output_kw,
-            rotor_speed_rpm=source_reading.rotor_speed_rpm,
-        )
-        readings.append(reading)
-
-    return readings
-
-
-from sqlalchemy.orm import sessionmaker
-
-'''
+"""
 * Initial transaction
 Create and commit IngestionRun with status running.
 
@@ -112,7 +40,9 @@ Normalize → save rejected readings → save canonical readings → update chec
 
 * Failure transaction
 Update checkpoint failure information and mark ingestion run failed → commit.
-'''
+"""
+
+
 def run_polling(
     client: httpx.Client,
     data_source_id: UUID,
@@ -179,8 +109,6 @@ def run_polling(
             end_at=end_at,
             client=client,
         )
-        print(endpoint_url)
-        print(payload)
 
         with session_factory() as session, session.begin():
             readings = normalize_payload(
@@ -249,16 +177,36 @@ def run_polling(
         raise
 
 
-if __name__ == "__main__":
-    data_source_id = UUID("01a1ac47-1032-7a75-b984-819c68f29df0")
+def run_polling_with_lock(
+    client: httpx.Client,
+    data_source_id: UUID,
+    session_factory: sessionmaker[Session],
+    engine: Engine,
+    now: datetime | None = None,
+) -> SaveResult | None:
+    with engine.connect() as connection:
+        acquired = try_acquire_lock(connection, data_source_id)
 
-    with httpx.Client() as client:
-        result = run_polling(
-            client=client,
-            data_source_id=data_source_id,
-            session_factory=SessionLocal,
-        )
+        if not acquired:
+            logger.info(
+                "Skipping data source %s: already being polled",
+                data_source_id,
+            )
+            return None
 
-    print(f"Inserted: {result.inserted}")
-    print(f"Updated: {result.updated}")
-    print(f"Unchanged: {result.unchanged}")
+        try:
+            logger.info("Worker acquired lock for %s", data_source_id)
+
+            return run_polling(
+                client=client,
+                data_source_id=data_source_id,
+                session_factory=session_factory,
+                now=now,
+            )
+        finally:
+            release_lock(connection, data_source_id)
+            logger.info("Worker released lock for %s", data_source_id)
+
+
+# if __name__ == "__main__":
+#     poll_all_data_sources()

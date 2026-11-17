@@ -26,6 +26,7 @@ class DataSource(Base):
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
     endpoint_url: Mapped[str] = mapped_column(String(500), nullable=True)
     protocol: Mapped[str] = mapped_column(String(50), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
