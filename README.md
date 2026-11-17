@@ -85,3 +85,46 @@ def normalize_payload(provider: str, payload: dict):
     adapter = ADAPTERS.get(provider)
     normalized_data = adapter(payload)
 ```
+
+## Concurrency Control by Level
+
+Concurrency can be controlled at different levels depending on the scope of the work being coordinated.
+
+| Level | Mechanism | Scope | Purpose |
+|---|---|---|---|
+| Job execution | APScheduler `max_instances` | Single scheduler process | Prevent overlapping executions of the same scheduled job |
+| Data source | PostgreSQL Advisory Lock | Multiple worker processes | Prevent concurrent polling of the same data source |
+| Database transaction | PostgreSQL transactions | Database operations | Maintain data consistency and atomicity |
+| Distributed messaging | Kafka consumer groups | Multiple consumers | Distribute message processing across consumers |
+
+**Current implementation**
+
+- `max_instances=1`: Allows only one instance of the scheduled job to run within each scheduler process.
+- PostgreSQL Advisory Lock: Ensures that only one worker can poll a particular data source at a time.
+- Database transactions: Ensure that ingestion results and checkpoint updates are committed consistently.
+
+## Distributed Polling Lock
+
+### Implementation
+
+* Uses PostgreSQL Advisory Locks (`pg_try_advisory_lock`).
+
+* Each data source has a deterministic lock key derived from its UUID.
+
+* If another worker already holds the lock, the worker skips that data source instead of waiting.
+
+* PostgreSQL automatically releases `session-level advisory locks` when the owning database connection closes.
+
+### Worker Coordination
+
+When two workers attempt to poll the same data source:
+
+1. Worker A acquires the lock and starts polling.
+
+2. Worker B fails to acquire the lock and skips that data source.
+
+3. Worker A completes polling and releases the lock.
+
+4. A subsequent polling attempt can acquire the lock.
+
+
