@@ -88,7 +88,7 @@ def normalize_payload(provider: str, payload: dict):
 
 ## Concurrency Control by Level
 
-Concurrency can be controlled at different levels depending on the scope of the work being coordinated.
+Concurrency can be controlled at different levels depending on the scope of the work.
 
 | Level | Mechanism | Scope | Purpose |
 |---|---|---|---|
@@ -97,11 +97,6 @@ Concurrency can be controlled at different levels depending on the scope of the 
 | Database transaction | PostgreSQL transactions | Database operations | Maintain data consistency and atomicity |
 | Distributed messaging | Kafka consumer groups | Multiple consumers | Distribute message processing across consumers |
 
-**Current implementation**
-
-- `max_instances=1`: Allows only one instance of the scheduled job to run within each scheduler process.
-- PostgreSQL Advisory Lock: Ensures that only one worker can poll a particular data source at a time.
-- Database transactions: Ensure that ingestion results and checkpoint updates are committed consistently.
 
 ## Distributed Polling Lock
 

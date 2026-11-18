@@ -8,10 +8,6 @@ from scada_api.data_sources.service import get_active_data_sources
 from scada_api.ingestion.poller import run_polling_with_lock
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
 
 
 def start_scheduler() -> None:

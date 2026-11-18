@@ -8,6 +8,7 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 class Settings(BaseSettings):
     database_url: str
+    kafka_bootstrap_servers: str
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,

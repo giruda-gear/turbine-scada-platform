@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 
 from fastapi import Depends, FastAPI
@@ -10,6 +11,13 @@ from scada_api.router import api_router
 app = FastAPI(title="SCADA API", version="0.1.0")
 
 app.include_router(api_router, prefix="/api")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 
 @app.get("/health")
