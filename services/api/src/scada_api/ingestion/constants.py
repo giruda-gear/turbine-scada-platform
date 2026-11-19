@@ -1,0 +1,1 @@
+RAW_READINGS_TOPIC = "raw-readings"

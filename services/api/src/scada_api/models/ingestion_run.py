@@ -22,7 +22,7 @@ class IngestionRun(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('running', 'success', 'failed')",
+            "status IN ('running', 'published', 'processing', 'success', 'failed')",
             name="ck_ingestion_runs_status",
         ),
         Index("ix_ingestion_runs_data_source_started", "data_source_id", "started_at"),

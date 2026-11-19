@@ -144,12 +144,12 @@ def update_ingestion_run(
     session: Session,
     ingestion_run_id: int,
     status: IngestionRunStatus,
-    completed_at: datetime,
-    received_count: int = 0,
-    inserted_count: int = 0,
-    updated_count: int = 0,
-    unchanged_count: int = 0,
-    rejected_count: int = 0,
+    completed_at: datetime | None = None,
+    received_count: int | None = None,
+    inserted_count: int | None = None,
+    updated_count: int | None = None,
+    unchanged_count: int | None = None,
+    rejected_count: int | None = None,
     error_message: str | None = None,
 ) -> None:
     ingestion_run = session.get(IngestionRun, ingestion_run_id)
@@ -158,13 +158,27 @@ def update_ingestion_run(
         raise ValueError(f"Ingestion run not found: {ingestion_run_id}")
 
     ingestion_run.status = status
-    ingestion_run.completed_at = completed_at
-    ingestion_run.received_count = received_count
-    ingestion_run.inserted_count = inserted_count
-    ingestion_run.updated_count = updated_count
-    ingestion_run.unchanged_count = unchanged_count
-    ingestion_run.rejected_count = rejected_count
-    ingestion_run.error_message = error_message
+
+    if completed_at is not None:
+        ingestion_run.completed_at = completed_at
+
+    if received_count is not None:
+        ingestion_run.received_count = received_count
+
+    if inserted_count is not None:
+        ingestion_run.inserted_count = inserted_count
+
+    if updated_count is not None:
+        ingestion_run.updated_count = updated_count
+
+    if unchanged_count is not None:
+        ingestion_run.unchanged_count = unchanged_count
+
+    if rejected_count is not None:
+        ingestion_run.rejected_count = rejected_count
+
+    if error_message is not None:
+        ingestion_run.error_message = error_message
 
 
 def record_polling_failure(

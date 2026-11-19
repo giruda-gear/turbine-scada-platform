@@ -11,6 +11,7 @@ from scada_api.ingestion.client import fetch_readings
 from scada_api.ingestion.enums import IngestionRunStatus
 from scada_api.ingestion.locking import release_lock, try_acquire_lock
 from scada_api.ingestion.normalizer import normalize_payload
+from scada_api.ingestion.producer import publish_raw_readings
 from scada_api.ingestion.service import (
     SaveResult,
     calculate_polling_window,
@@ -44,7 +45,7 @@ def run_polling(
     data_source_id: UUID,
     session_factory: sessionmaker[Session],
     now: datetime | None = None,
-) -> SaveResult:
+) -> int:
     now = now or datetime.now(UTC)
 
     with session_factory() as session:
@@ -78,11 +79,7 @@ def run_polling(
         )
 
     if window is None:
-        return SaveResult(
-            inserted=0,
-            updated=0,
-            unchanged=0,
-        )
+        return 0
 
     start_at, end_at = window
     attempted_at = now
@@ -106,20 +103,16 @@ def run_polling(
             client=client,
         )
 
+        publish_raw_readings(
+            ingestion_run_id=ingestion_run_id,
+            data_source_id=data_source_id,
+            provider=provider,
+            window_start=start_at,
+            window_end=end_at,
+            payload=payload,
+        )
+
         with session_factory() as session, session.begin():
-            readings = normalize_payload(
-                session=session,
-                data_source_id=data_source_id,
-                provider=provider,
-                payload=payload,
-                ingestion_run_id=ingestion_run_id,
-            )
-
-            saved_count = save_readings(
-                session=session,
-                readings=readings,
-            )
-
             checkpoint = get_checkpoint(
                 session=session,
                 data_source_id=data_source_id,
@@ -137,16 +130,12 @@ def run_polling(
             update_ingestion_run(
                 session=session,
                 ingestion_run_id=ingestion_run_id,
-                status=IngestionRunStatus.SUCCESS,
+                status=IngestionRunStatus.PUBLISHED,
                 completed_at=now,
                 received_count=len(payload["readings"]),
-                inserted_count=saved_count.inserted,
-                updated_count=saved_count.updated,
-                unchanged_count=saved_count.unchanged,
-                rejected_count=len(payload["readings"]) - len(readings),
             )
 
-        return saved_count
+        return len(payload["readings"])
 
     except Exception as exc:
         with session_factory() as session, session.begin():
@@ -179,7 +168,7 @@ def run_polling_with_lock(
     session_factory: sessionmaker[Session],
     engine: Engine,
     now: datetime | None = None,
-) -> SaveResult | None:
+) -> int | None:
     with engine.connect() as connection:
         acquired = try_acquire_lock(connection, data_source_id)
 
