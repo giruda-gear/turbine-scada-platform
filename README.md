@@ -123,3 +123,25 @@ When two workers attempt to poll the same data source:
 4. A subsequent polling attempt can acquire the lock.
 
 
+## Race Condition: Kafka publish vs. DB commit
+
+The poller published to Kafka *before* committing `RUNNING → PUBLISHED`.
+The consumer could receive the message while the run was still `RUNNING`,
+so its `PUBLISHED → PROCESSING` transition failed and fell back to retries.
+
+```
+Poller                               Consumer
+publish to Kafka ──────────────────► receives message
+(DB still RUNNING)                   RUNNING → PROCESSING fails
+commit PUBLISHED                     transient retry...
+```
+
+### Fix
+The checkpoint advances only after a successful publish.
+
+```
+Poller:   RUNNING → PUBLISHED   (Kafka publish after DB commit)
+          RUNNING/PUBLISHED → FAILED (polling or publish failure)
+Consumer: PUBLISHED → PROCESSING → SUCCESS
+                                  ↘ FAILED
+```
