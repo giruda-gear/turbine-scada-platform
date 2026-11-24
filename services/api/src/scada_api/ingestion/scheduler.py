@@ -39,20 +39,18 @@ def poll_all_data_sources() -> None:
     for data_source_id in data_source_ids:
         try:
             with httpx.Client() as client:
-                result = run_polling_with_lock(
+                published_count = run_polling_with_lock(
                     client=client,
                     data_source_id=data_source_id,
                     session_factory=SessionLocal,
                     engine=engine,
                 )
 
-            if result is not None:
+            if published_count is not None:
                 logger.info(
-                    "Polling completed for %s: inserted=%d updated=%d unchanged=%d",
+                    "Polling completed for %s: published=%d readings",
                     data_source_id,
-                    result.inserted,
-                    result.updated,
-                    result.unchanged,
+                    published_count,
                 )
 
         except Exception:

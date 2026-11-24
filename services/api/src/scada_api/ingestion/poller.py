@@ -6,37 +6,31 @@ import httpx
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from scada_api.core.logging import setup_logging
 from scada_api.data_sources.service import get_data_source
 from scada_api.ingestion.client import fetch_readings
 from scada_api.ingestion.enums import IngestionRunStatus
 from scada_api.ingestion.locking import release_lock, try_acquire_lock
-from scada_api.ingestion.normalizer import normalize_payload
 from scada_api.ingestion.producer import publish_raw_readings
 from scada_api.ingestion.service import (
-    SaveResult,
     calculate_polling_window,
     create_ingestion_run,
     get_checkpoint,
     record_polling_failure,
-    save_readings,
     update_checkpoint,
     update_ingestion_run,
 )
 
+setup_logging()
 logger = logging.getLogger(__name__)
 
 """
-* Initial transaction
-Create and commit IngestionRun with status running.
+Poller:   RUNNING → PUBLISHED   (Kafka publish after DB commit)
+          RUNNING/PUBLISHED → FAILED (polling or publish failure)
+Consumer: PUBLISHED → PROCESSING → SUCCESS
+                                  ↘ FAILED
 
-* HTTP request
-Fetch vendor payload outside the database transaction.
-
-* Success transaction
-Normalize → save rejected readings → save canonical readings → update checkpoint → update ingestion run → commit together.
-
-* Failure transaction
-Update checkpoint failure information and mark ingestion run failed → commit.
+The checkpoint advances only after a successful publish.
 """
 
 
@@ -84,7 +78,7 @@ def run_polling(
     start_at, end_at = window
     attempted_at = now
 
-    with session_factory() as session:
+    with session_factory() as session, session.begin():
         ingestion_run = create_ingestion_run(
             session=session,
             data_source_id=data_source_id,
@@ -92,7 +86,7 @@ def run_polling(
             window_end=end_at,
             started_at=attempted_at,
         )
-
+        session.flush()
         ingestion_run_id = ingestion_run.id
 
     try:
@@ -102,6 +96,23 @@ def run_polling(
             end_at=end_at,
             client=client,
         )
+        received_count = len(payload["readings"])
+
+        with session_factory() as session, session.begin():
+            updated = update_ingestion_run(
+                session=session,
+                ingestion_run_id=ingestion_run_id,
+                expected_status=IngestionRunStatus.RUNNING,
+                status=IngestionRunStatus.PUBLISHED,
+                completed_at=datetime.now(UTC),
+                received_count=received_count,
+            )
+            if not updated:
+                raise RuntimeError(
+                    f"Ingestion run {ingestion_run_id} could not transition "
+                    "from RUNNING to PUBLISHED"
+                )
+        logger.info("Ingestion run %s: PUBLISHED committed", ingestion_run_id)
 
         publish_raw_readings(
             ingestion_run_id=ingestion_run_id,
@@ -111,13 +122,13 @@ def run_polling(
             window_end=end_at,
             payload=payload,
         )
+        logger.info("Ingestion run %s: published to Kafka", ingestion_run_id)
 
         with session_factory() as session, session.begin():
             checkpoint = get_checkpoint(
                 session=session,
                 data_source_id=data_source_id,
             )
-
             if checkpoint is None:
                 raise ValueError(f"Checkpoint not found: {data_source_id}")
 
@@ -127,23 +138,15 @@ def run_polling(
                 end_at=end_at,
             )
 
-            update_ingestion_run(
-                session=session,
-                ingestion_run_id=ingestion_run_id,
-                status=IngestionRunStatus.PUBLISHED,
-                completed_at=now,
-                received_count=len(payload["readings"]),
-            )
-
-        return len(payload["readings"])
+        return received_count
 
     except Exception as exc:
+        logger.exception("Polling failed for ingestion run %s", ingestion_run_id)
         with session_factory() as session, session.begin():
             checkpoint = get_checkpoint(
                 session=session,
                 data_source_id=data_source_id,
             )
-
             if checkpoint is not None:
                 record_polling_failure(
                     checkpoint=checkpoint,
@@ -154,8 +157,12 @@ def run_polling(
             update_ingestion_run(
                 session=session,
                 ingestion_run_id=ingestion_run_id,
+                expected_status=(
+                    IngestionRunStatus.RUNNING,
+                    IngestionRunStatus.PUBLISHED,
+                ),
                 status=IngestionRunStatus.FAILED,
-                completed_at=now,
+                completed_at=datetime.now(UTC),
                 error_message=str(exc),
             )
 
@@ -191,7 +198,3 @@ def run_polling_with_lock(
         finally:
             release_lock(connection, data_source_id)
             logger.info("Worker released lock for %s", data_source_id)
-
-
-# if __name__ == "__main__":
-#     poll_all_data_sources()

@@ -11,7 +11,7 @@ router = APIRouter()
 
 TURBINES = {
     "siemens": ["WT-001", "WT-002"],
-    "vestas": ["V100-001", "V100-002", "V-rejected"],
+    "vestas": ["V100-001", "V100-002"],
 }
 
 

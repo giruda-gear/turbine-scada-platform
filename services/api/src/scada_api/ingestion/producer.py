@@ -28,19 +28,17 @@ def publish_raw_readings(
     )
 
     message = {
-        "ingestion_run_id": str(ingestion_run_id),
+        "ingestion_run_id": ingestion_run_id,
         "data_source_id": str(data_source_id),
         "provider": provider,
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
         "payload": payload,
     }
-
+    # the same key are normally routed to the same partition
     producer.produce(
         topic=RAW_READINGS_TOPIC,
-        key=str(
-            data_source_id
-        ),  # the same key are normally routed to the same partition
+        key=str(data_source_id),
         value=json.dumps(message),
         callback=delivery_report,
     )

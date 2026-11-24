@@ -1,11 +1,14 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any, Sequence
 from uuid import UUID
 
-from sqlalchemy import func, literal_column, or_, select
+from sqlalchemy import func, literal_column, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from scada_api.core.logging import setup_logging
 from scada_api.ingestion.enums import IngestionRunStatus
 from scada_api.ingestion.schema import CanonicalReading
 from scada_api.models import (
@@ -16,6 +19,8 @@ from scada_api.models import (
     TurbineSourceMapping,
 )
 
+setup_logging()
+logger = logging.getLogger(__name__)
 INITIAL_LOOKBACK = timedelta(hours=1)
 MAX_WINDOW = timedelta(hours=1)
 
@@ -65,6 +70,16 @@ def create_ingestion_run(
     session.add(run)
     session.commit()
     return run
+
+
+def get_ingestion_run_status(
+    session: Session,
+    ingestion_run_id: int,
+) -> IngestionRunStatus | None:
+    status = session.scalar(
+        select(IngestionRun.status).where(IngestionRun.id == ingestion_run_id)
+    )
+    return IngestionRunStatus(status) if status is not None else None
 
 
 def save_readings(session: Session, readings: list[CanonicalReading]) -> SaveResult:
@@ -144,6 +159,7 @@ def update_ingestion_run(
     session: Session,
     ingestion_run_id: int,
     status: IngestionRunStatus,
+    expected_status: IngestionRunStatus | Sequence[IngestionRunStatus] | None = None,
     completed_at: datetime | None = None,
     received_count: int | None = None,
     inserted_count: int | None = None,
@@ -151,34 +167,49 @@ def update_ingestion_run(
     unchanged_count: int | None = None,
     rejected_count: int | None = None,
     error_message: str | None = None,
-) -> None:
-    ingestion_run = session.get(IngestionRun, ingestion_run_id)
+) -> bool:
+    optional_fields = {
+        "completed_at": completed_at,
+        "received_count": received_count,
+        "inserted_count": inserted_count,
+        "updated_count": updated_count,
+        "unchanged_count": unchanged_count,
+        "rejected_count": rejected_count,
+        "error_message": error_message,
+    }
+    values: dict[str, Any] = {"status": status}
+    values.update({k: v for k, v in optional_fields.items() if v is not None})
 
-    if ingestion_run is None:
+    statement = (
+        update(IngestionRun)
+        .where(IngestionRun.id == ingestion_run_id)
+        .values(**values)
+        .returning(IngestionRun.id)
+    )
+
+    if expected_status is not None:
+        if isinstance(expected_status, IngestionRunStatus):
+            statement = statement.where(IngestionRun.status == expected_status)
+        else:
+            statement = statement.where(IngestionRun.status.in_(list(expected_status)))
+
+    updated_id = session.scalar(statement)
+
+    if updated_id is not None:
+        return True
+
+    # The ingestion run doesn't exist.
+    # The ingestion run exists, but its status doesn't match expected_status.
+    exists = session.scalar(
+        select(IngestionRun.id).where(
+            IngestionRun.id == ingestion_run_id,
+        )
+    )
+
+    if exists is None:
         raise ValueError(f"Ingestion run not found: {ingestion_run_id}")
 
-    ingestion_run.status = status
-
-    if completed_at is not None:
-        ingestion_run.completed_at = completed_at
-
-    if received_count is not None:
-        ingestion_run.received_count = received_count
-
-    if inserted_count is not None:
-        ingestion_run.inserted_count = inserted_count
-
-    if updated_count is not None:
-        ingestion_run.updated_count = updated_count
-
-    if unchanged_count is not None:
-        ingestion_run.unchanged_count = unchanged_count
-
-    if rejected_count is not None:
-        ingestion_run.rejected_count = rejected_count
-
-    if error_message is not None:
-        ingestion_run.error_message = error_message
+    return False
 
 
 def record_polling_failure(
