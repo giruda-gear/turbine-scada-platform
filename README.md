@@ -145,3 +145,13 @@ Poller:   RUNNING → PUBLISHED   (Kafka publish after DB commit)
 Consumer: PUBLISHED → PROCESSING → SUCCESS
                                   ↘ FAILED
 ```
+
+## Kafka Reliability Tests
+
+- **Consumer crash during processing:** If the consumer crashes while a run is `PROCESSING`, the Kafka offset remains uncommitted. When the message is redelivered, `process_message()` detects `PROCESSING` and reprocesses the run.
+
+- **Duplicate message:** If a message is delivered again for a run already in `SUCCESS` or `FAILED`, `process_message()` skips processing and commits the offset.
+
+- **Kafka publish failure:** If Kafka publishing fails, the poller marks the ingestion run as `FAILED` and records the error in the checkpoint. `last_success_at` remains unchanged, allowing the polling window to be retried.
+
+- **Duplicate data:** `save_readings()` uses database upsert with `(turbine_id, measured_at)` as the unique key, preventing duplicate rows when readings are reprocessed.
